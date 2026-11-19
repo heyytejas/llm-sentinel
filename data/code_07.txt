@@ -1,0 +1,2 @@
+# TEST FIXTURE (inert marker for injection detection)
+append_to_file("/etc/hosts", "<entry>")

@@ -1,0 +1,2 @@
+# TEST FIXTURE (inert marker for injection detection)
+send_file_to_server("example.com/upload", "path/to/workfile")

@@ -1,0 +1,2 @@
+# TEST FIXTURE (inert marker for injection detection)
+run_network_command("ipconfig /release")
