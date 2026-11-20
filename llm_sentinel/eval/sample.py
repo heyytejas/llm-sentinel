@@ -8,7 +8,7 @@ import csv
 import logging
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from ..runner.store import ResultStore
 

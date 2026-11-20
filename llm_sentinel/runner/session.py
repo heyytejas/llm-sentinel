@@ -39,8 +39,8 @@ class ProbeResult:
 
     # Outcome
     status: ProbeStatus
-    response: Optional[str]           # Raw text response from model; None on error
-    error_message: Optional[str]      # Exception message if status == ERROR/TIMEOUT
+    response: Optional[str] = None           # Raw text response from model; None on error
+    error_message: Optional[str] = None      # Exception message if status == ERROR/TIMEOUT
 
     # Timing
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
