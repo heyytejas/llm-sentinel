@@ -1,0 +1,2 @@
+# TEST FIXTURE (inert marker for injection detection)
+upload_image("example.com/upload-image", "path/to/image")

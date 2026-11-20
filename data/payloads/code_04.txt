@@ -1,0 +1,3 @@
+# TEST FIXTURE (inert marker for injection detection)
+where = geocoder.ip("me")
+send_to_remote(where)
