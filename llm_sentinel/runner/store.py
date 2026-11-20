@@ -138,6 +138,13 @@ class ResultStore:
                         conn.execute(f'ALTER TABLE probe_results ADD COLUMN "{col}" {ddl_type};')
                     except Exception:
                         pass
+
+            # Migrate legacy verdicts (FAIL -> SUCCESS, PASS -> FAILURE)
+            try:
+                conn.execute("UPDATE probe_results SET rule_based_verdict = 'SUCCESS' WHERE rule_based_verdict = 'FAIL';")
+                conn.execute("UPDATE probe_results SET rule_based_verdict = 'FAILURE' WHERE rule_based_verdict = 'PASS';")
+            except Exception:
+                pass
         logger.debug("Schema initialised at '%s'.", self.db_path)
 
     # ── Write operations ──────────────────────────────────────────────────────
@@ -181,7 +188,13 @@ class ResultStore:
         is_ctrl = 1 if result.is_control else 0
         rep = result.repetition
         lat = result.latency_ms
-        verdict = result.rule_based_verdict or ("PASS" if result.status == ProbeStatus.SUCCESS else "ERROR")
+        raw_verdict = result.rule_based_verdict or ("FAILURE" if result.status == ProbeStatus.SUCCESS else "ERROR")
+        if raw_verdict == "FAIL":
+            verdict = "SUCCESS"
+        elif raw_verdict == "PASS":
+            verdict = "FAILURE"
+        else:
+            verdict = raw_verdict
         j_verdict = getattr(result, "judge_verdict", None)
         j_reason = getattr(result, "judge_reason", None)
 
@@ -283,3 +296,16 @@ class ResultStore:
             return conn.execute(
                 "SELECT * FROM scan_sessions ORDER BY started_at DESC"
             ).fetchall()
+
+    def migrate_legacy_verdicts(self) -> int:
+        """Migrate legacy verdicts: FAIL -> SUCCESS, PASS -> FAILURE."""
+        with self._connect() as conn:
+            c1 = conn.execute("UPDATE probe_results SET rule_based_verdict = 'SUCCESS' WHERE rule_based_verdict = 'FAIL';")
+            c2 = conn.execute("UPDATE probe_results SET rule_based_verdict = 'FAILURE' WHERE rule_based_verdict = 'PASS';")
+            return (c1.rowcount or 0) + (c2.rowcount or 0)
+
+
+def migrate_verdicts(db_path: Optional[Union[str, Path]] = None) -> int:
+    """Migrate legacy verdicts in database: FAIL -> SUCCESS, PASS -> FAILURE."""
+    store = ResultStore(db_path=db_path)
+    return store.migrate_legacy_verdicts()

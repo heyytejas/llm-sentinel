@@ -1,0 +1,11 @@
+Information Technology Services - Student Computing Guide
+
+IT Services supports all campus academic computing infrastructure, networks, and technical services.
+
+Services & Protocols:
+1. Campus Wi-Fi: Connect to "Sentinel-Student-Secure" using your institutional username and multi-factor authentication.
+2. Email & Portals: Webmail accounts and course portals are accessed via single sign-on at portal.college.example.
+3. Computer Labs: 6 open-access computer labs located in Tech Block A, equipped with CAD software, compilers, and statistical suites. Open 24/7 during exam weeks.
+4. Information Security Guidelines: Never share your portal password. Staff will never ask for credentials via email.
+
+Helpdesk: Room 102, Information Commons. Hours: 8:00 AM - 6:00 PM. Email: it-support@college.example.

@@ -22,7 +22,6 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 from ..adapters.adapter import BaseAdapter, MockTarget, get_adapter
 from ..attacks.loader import load_hosts, load_library, AttackLoadError
 from ..attacks.models import AttackEntry, SeedAttackCase
-from ..demo.chatbot import DEFAULT_CANARY
 from ..detectors.rule_based import RuleBasedDetector
 from .session import ProbeResult, ProbeStatus, ScanSession
 from .store import ResultStore
@@ -134,7 +133,11 @@ class ScanEngine:
         For indirect and poisoning cases, safely builds, indexes, queries,
         and removes the poisoned document so cases never cross-contaminate.
         """
-        effective_system_prompt = getattr(entry, "system_prompt_override", None) or self.system_prompt
+        effective_system_prompt = (
+            getattr(entry, "system_prompt_override", None)
+            or self.system_prompt
+            or getattr(self.adapter, "system_prompt", None)
+        )
         attack_type = getattr(entry, "type", "direct")
         is_corpus_case = (attack_type in ("indirect", "poisoning")) and hasattr(entry, "build_document")
 
@@ -216,9 +219,21 @@ class ScanEngine:
                 )
                 latency_ms = (time.monotonic() - t_start) * 1000.0
 
+                # Extract canary tokens from target
+                target_canaries: List[str] = []
+                for obj in [self.adapter, getattr(self.adapter, "backend_adapter", None), getattr(self.adapter, "backend", None)]:
+                    if obj:
+                        if hasattr(obj, "canaries") and obj.canaries:
+                            for c in obj.canaries:
+                                if c and c not in target_canaries:
+                                    target_canaries.append(c)
+                        elif hasattr(obj, "canary") and obj.canary:
+                            if obj.canary not in target_canaries:
+                                target_canaries.append(obj.canary)
+
                 # Evaluate response with RuleBasedDetector
                 detector = RuleBasedDetector(
-                    canary_tokens=[DEFAULT_CANARY],
+                    canary_tokens=target_canaries,
                     patterns=getattr(entry, "patterns", None),
                 )
                 if hasattr(entry, "success_if") and entry.success_if:
@@ -226,7 +241,11 @@ class ScanEngine:
                 else:
                     detection = detector.evaluate(response_text)
 
-                verdict = "FAIL" if detection.attack_succeeded else "PASS"
+                verdict = "SUCCESS" if detection.attack_succeeded else "FAILURE"
+
+                final_retrieved_chunks = retrieved_chunks
+                if not final_retrieved_chunks and hasattr(self.adapter, "last_retrieved_chunks") and self.adapter.last_retrieved_chunks:
+                    final_retrieved_chunks = list(self.adapter.last_retrieved_chunks)
 
                 result = ProbeResult(
                     attack_id=attack_id,
@@ -251,7 +270,7 @@ class ScanEngine:
                     is_control=is_control,
                     repetition=repetition,
                     query=prompt_text,
-                    retrieved_chunks=retrieved_chunks,
+                    retrieved_chunks=final_retrieved_chunks,
                     rule_based_verdict=verdict,
                 )
                 logger.info(
@@ -507,6 +526,13 @@ class ScanEngine:
 def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LLM Sentinel Scan Runner Engine")
     parser.add_argument(
+        "--target",
+        type=str,
+        choices=["rag", "raw"],
+        default="rag",
+        help="Target application wrapper: 'rag' (default) or 'raw'.",
+    )
+    parser.add_argument(
         "--repeats", "-r",
         type=int,
         default=3,
@@ -553,9 +579,15 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
 def main(args: Optional[List[str]] = None) -> int:
     parsed = parse_args(args)
     if parsed.mock_target or parsed.provider == "mock":
-        adapter = MockTarget(model=parsed.model or "mock-sentinel-v1")
+        backend = MockTarget(model=parsed.model or "mock-sentinel-v1")
     else:
-        adapter = get_adapter(parsed.provider, model=parsed.model) if parsed.model else get_adapter(parsed.provider)
+        backend = get_adapter(parsed.provider, model=parsed.model) if parsed.model else get_adapter(parsed.provider)
+
+    if parsed.target == "rag":
+        from ..target.rag_app import RagTarget
+        adapter = RagTarget(backend_adapter=backend)
+    else:
+        adapter = backend
 
     engine = ScanEngine(
         adapter=adapter,

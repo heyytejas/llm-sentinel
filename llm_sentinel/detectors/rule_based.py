@@ -154,3 +154,23 @@ class RuleBasedDetector(BaseDetector):
             attack_succeeded=False,
             details="No canary leak, pattern match, or attack success condition triggered.",
         )
+
+    def get_verdict(
+        self,
+        response: str,
+        success_condition: Optional[SuccessCondition] = None,
+        canary: Optional[str] = None,
+        patterns: Optional[List[str]] = None,
+        **kwargs,
+    ) -> str:
+        """
+        Evaluate and return normalized verdict string: SUCCESS | FAILURE.
+        """
+        result = self.evaluate(
+            response=response,
+            success_condition=success_condition,
+            canary=canary,
+            patterns=patterns,
+            **kwargs,
+        )
+        return result.verdict

@@ -18,6 +18,11 @@ class DetectionResult:
     def __bool__(self) -> bool:
         return self.attack_succeeded
 
+    @property
+    def verdict(self) -> str:
+        """Normalized verdict string: 'SUCCESS' or 'FAILURE'."""
+        return "SUCCESS" if self.attack_succeeded else "FAILURE"
+
 
 class BaseDetector(ABC):
     """Abstract base class for all detection modules."""

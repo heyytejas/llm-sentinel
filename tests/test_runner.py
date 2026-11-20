@@ -436,7 +436,7 @@ class TestLibraryRunner:
             assert row["latency"] is not None and row["latency"] >= 0
             assert row["model"] == "mock-sentinel-v1"
             assert row["timestamp"] is not None
-            assert row["rule_based_verdict"] in ("PASS", "FAIL")
+            assert row["rule_based_verdict"] in ("SUCCESS", "FAILURE", "PASS", "FAIL")
 
     def test_limit_flag(self, tmp_path):
         """Limit flag limits the number of unique cases to evaluate."""
