@@ -53,6 +53,18 @@ class ProbeResult:
     # Scan session linkage
     scan_id: Optional[str] = None      # FK to ScanSession.scan_id
 
+    # Extended library & RAG metadata
+    case_id: Optional[str] = None
+    group: Optional[str] = None
+    type: Optional[str] = None
+    is_control: bool = False
+    repetition: int = 1
+    query: Optional[str] = None
+    retrieved_chunks: Optional[List[str]] = None
+    rule_based_verdict: Optional[str] = None
+    judge_verdict: Optional[str] = None
+    judge_reason: Optional[str] = None
+
 
 @dataclass
 class ScanSession:

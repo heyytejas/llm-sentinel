@@ -22,6 +22,26 @@ class BaseAdapter(ABC):
     def __init__(self, model: str, timeout: float = 30.0) -> None:
         self.model = model
         self.timeout = timeout
+        self.corpus: Dict[str, str] = {}
+        self.indexed: bool = True
+
+    def add_document(self, doc_id: str, content: str) -> None:
+        """Add a document to the target corpus."""
+        self.corpus[doc_id] = content
+        self.indexed = False
+
+    def remove_document(self, doc_id: str) -> None:
+        """Remove a document from the target corpus."""
+        self.corpus.pop(doc_id, None)
+        self.indexed = False
+
+    def reindex(self) -> None:
+        """Re-index the corpus after documents are added or removed."""
+        self.indexed = True
+
+    def get_retrieved_chunks(self, query: str) -> List[str]:
+        """Return retrieved document chunks relevant to query (defaults to all corpus chunks)."""
+        return list(self.corpus.values())
 
     @abstractmethod
     def send(self, prompt: str, system_prompt: Optional[str] = None) -> str:
@@ -185,12 +205,15 @@ class MockTarget(BaseAdapter):
         canned_responses: Optional[Dict[str, str]] = None,
         response_handler: Optional[Callable[[str, Optional[str]], str]] = None,
         model: str = "mock-sentinel-v1",
+        corpus: Optional[Dict[str, str]] = None,
     ) -> None:
         super().__init__(model=model)
         self.default_response = default_response
         self.canned_responses = canned_responses or {}
         self.response_handler = response_handler
         self.history: List[Dict[str, Optional[str]]] = []
+        if corpus:
+            self.corpus.update(corpus)
 
     def set_canned_response(self, prompt_keyword: str, canned_output: str) -> None:
         """Add or update a keyword-triggered canned response."""

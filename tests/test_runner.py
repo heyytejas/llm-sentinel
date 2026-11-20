@@ -310,3 +310,167 @@ class TestEndToEndWithRealAttacks:
             assert row["model"] == "mock-sentinel-v1"
             assert row["timestamp"]
             assert row["response"]
+
+
+# ── Library-based ScanEngine Tests (load_library, repeats, corpus isolation) ─
+
+class TestLibraryRunner:
+    """
+    Tests runner integration with load_library():
+      - rows = (48 + 10) x r
+      - controls marked with is_control
+      - no leftover injected documents in target corpus
+      - stored SQLite schema columns
+      - limit flag
+      - mock-target CLI execution
+    """
+
+    def test_mock_target_full_scan_row_count_default_r(self, tmp_path):
+        """Full scan with default repeats (r=3) gives (48 + 10) * 3 = 174 rows."""
+        adapter = MockTarget(default_response="Safe response.")
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "lib_r3.db",
+            concurrency=4,
+        )
+        session = engine.run()
+        r = 3
+        expected_rows = (48 + 10) * r
+        assert session.total == expected_rows
+
+        store = ResultStore(db_path=tmp_path / "lib_r3.db")
+        rows = store.get_results_for_scan(session.scan_id)
+        assert len(rows) == expected_rows
+
+    def test_mock_target_scan_row_count_custom_r(self, tmp_path):
+        """Full scan with custom repeats (e.g. r=2) gives (48 + 10) * 2 = 116 rows."""
+        adapter = MockTarget(default_response="Safe response.")
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "lib_r2.db",
+            concurrency=4,
+            repeats=2,
+        )
+        session = engine.run()
+        r = 2
+        expected_rows = (48 + 10) * r
+        assert session.total == expected_rows
+
+        store = ResultStore(db_path=tmp_path / "lib_r2.db")
+        rows = store.get_results_for_scan(session.scan_id)
+        assert len(rows) == expected_rows
+
+    def test_no_leftover_injected_documents(self, tmp_path):
+        """After running indirect/poisoning cases, the corpus must contain 0 leftover documents."""
+        adapter = MockTarget(default_response="Safe response.")
+        assert len(adapter.corpus) == 0
+
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "clean_corpus.db",
+            concurrency=2,
+            repeats=1,
+        )
+        engine.run()
+        assert len(adapter.corpus) == 0, f"Leftover documents found in corpus: {list(adapter.corpus.keys())}"
+
+    def test_controls_are_marked(self, tmp_path):
+        """Controls must be marked with is_control=1; attacks with is_control=0."""
+        adapter = MockTarget(default_response="Safe response.")
+        r = 2
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "controls.db",
+            concurrency=4,
+            repeats=r,
+        )
+        session = engine.run()
+        store = ResultStore(db_path=tmp_path / "controls.db")
+        rows = store.get_results_for_scan(session.scan_id)
+
+        control_rows = [row for row in rows if row["is_control"] == 1]
+        attack_rows = [row for row in rows if row["is_control"] == 0]
+
+        assert len(control_rows) == 10 * r, f"Expected {10 * r} control rows, got {len(control_rows)}"
+        assert len(attack_rows) == 48 * r, f"Expected {48 * r} attack rows, got {len(attack_rows)}"
+
+        for row in control_rows:
+            assert row["case_id"].startswith("CT-")
+            assert row["is_control"] == 1
+
+        for row in attack_rows:
+            assert not row["case_id"].startswith("CT-")
+            assert row["is_control"] == 0
+
+    def test_stored_sqlite_fields(self, tmp_path):
+        """
+        Verify SQLite stores:
+          case id, category, group, type, is_control, repetition number,
+          query, retrieved chunks, response, latency, model name, timestamp,
+          and rule-based verdict.
+        """
+        adapter = MockTarget(default_response="Safe response from target.")
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "fields.db",
+            repeats=1,
+            limit=5,
+        )
+        session = engine.run()
+        store = ResultStore(db_path=tmp_path / "fields.db")
+        rows = store.get_results_for_scan(session.scan_id)
+        assert len(rows) == 5
+
+        for row in rows:
+            # Check all required fields are present and valid
+            assert row["case_id"] is not None and len(row["case_id"]) > 0
+            assert row["category"] is not None and len(row["category"]) > 0
+            assert row["group"] is not None
+            assert row["type"] in ("direct", "indirect", "poisoning", "direct_injection")
+            assert row["is_control"] in (0, 1)
+            assert row["repetition"] == 1
+            assert row["repetition_number"] == 1
+            assert row["query"] is not None and len(row["query"]) > 0
+            assert row["retrieved_chunks"] is not None  # JSON list string
+            assert row["response"] == "Safe response from target."
+            assert row["latency"] is not None and row["latency"] >= 0
+            assert row["model"] == "mock-sentinel-v1"
+            assert row["timestamp"] is not None
+            assert row["rule_based_verdict"] in ("PASS", "FAIL")
+
+    def test_limit_flag(self, tmp_path):
+        """Limit flag limits the number of unique cases to evaluate."""
+        adapter = MockTarget(default_response="Safe response.")
+        limit_val = 7
+        repeats_val = 2
+        engine = ScanEngine(
+            adapter=adapter,
+            db_path=tmp_path / "limit.db",
+            concurrency=2,
+            repeats=repeats_val,
+            limit=limit_val,
+        )
+        session = engine.run()
+        assert session.total == limit_val * repeats_val
+
+        store = ResultStore(db_path=tmp_path / "limit.db")
+        rows = store.get_results_for_scan(session.scan_id)
+        assert len(rows) == limit_val * repeats_val
+
+    def test_cli_mock_target(self, tmp_path):
+        """CLI invocation with --mock-target, --repeats, and --limit."""
+        from llm_sentinel.runner.engine import main
+        db_file = tmp_path / "cli_test.db"
+        ret = main([
+            "--mock-target",
+            "--repeats", "2",
+            "--limit", "4",
+            "--db-path", str(db_file),
+            "--concurrency", "2",
+        ])
+        assert ret == 0
+        store = ResultStore(db_path=db_file)
+        sessions = store.list_sessions()
+        assert len(sessions) == 1
+        rows = store.get_results_for_scan(sessions[0]["scan_id"])
+        assert len(rows) == 4 * 2

@@ -336,14 +336,59 @@ class SeedAttackCase(BaseModel):
         FileNotFoundError
             If a referenced payload fixture file is missing.
         """
-        if self.type != "indirect":
+        if self.type not in ("indirect", "poisoning"):
             raise ValueError(
-                f"build_document() is only valid for indirect cases; "
+                f"build_document() is only valid for indirect and poisoning cases; "
                 f"case '{self.id}' has type='{self.type}'."
             )
 
         payloads_dir = Path(payloads_dir)
 
+        if self.type == "poisoning":
+            raw_text = self.setup_document or ""
+            if raw_text in hosts:
+                template = hosts[raw_text]
+            else:
+                template = raw_text
+
+            # Resolve any {{payload:NAME}} in template
+            resolved_template = template
+            for match in _PAYLOAD_PLACEHOLDER_RE.finditer(template):
+                name = match.group(1)
+                payload_path = payloads_dir / f"{name}.txt"
+                if not payload_path.exists():
+                    raise FileNotFoundError(
+                        f"Payload file missing for '{{{{payload:{name}}}}}' "
+                        f"referenced by attack '{self.id}'. "
+                        f"Expected: '{payload_path}'."
+                    )
+                payload_text = payload_path.read_text(encoding="utf-8")
+                resolved_template = resolved_template.replace(match.group(0), payload_text)
+
+            if self.injection:
+                resolved_inj = self.injection
+                for match in _PAYLOAD_PLACEHOLDER_RE.finditer(self.injection):
+                    name = match.group(1)
+                    payload_path = payloads_dir / f"{name}.txt"
+                    if not payload_path.exists():
+                        raise FileNotFoundError(
+                            f"Payload file missing for '{{{{payload:{name}}}}}' "
+                            f"referenced by attack '{self.id}'. "
+                            f"Expected: '{payload_path}'."
+                        )
+                    payload_text = payload_path.read_text(encoding="utf-8")
+                    resolved_inj = resolved_inj.replace(match.group(0), payload_text)
+
+                if "{{INJECTION}}" in resolved_template:
+                    return resolved_template.replace("{{INJECTION}}", resolved_inj)
+                if self.position == "start":
+                    return resolved_inj + "\n\n" + resolved_template.strip()
+                else:
+                    return resolved_template.strip() + "\n\n" + resolved_inj
+
+            return resolved_template
+
+        # Indirect cases:
         # Resolve {{payload:NAME}} placeholders in the injection string.
         resolved_injection = self.injection
         for match in _PAYLOAD_PLACEHOLDER_RE.finditer(self.injection):

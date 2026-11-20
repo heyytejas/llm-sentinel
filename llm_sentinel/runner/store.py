@@ -10,6 +10,7 @@ Uses only the Python standard library (sqlite3) — no ORM dependency.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -39,23 +40,37 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 
 _CREATE_RESULTS = """
 CREATE TABLE IF NOT EXISTS probe_results (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id         TEXT NOT NULL,
-    attack_id       TEXT NOT NULL,
-    attack_name     TEXT NOT NULL,
-    category        TEXT NOT NULL,
-    attack_type     TEXT NOT NULL,
-    severity        TEXT NOT NULL,
-    model           TEXT NOT NULL,
-    prompt          TEXT NOT NULL,
-    system_prompt   TEXT,
-    status          TEXT NOT NULL,
-    response        TEXT,
-    error_message   TEXT,
-    timestamp       TEXT NOT NULL,
-    latency_ms      REAL,
-    attempt         INTEGER NOT NULL DEFAULT 1,
-    max_attempts    INTEGER NOT NULL DEFAULT 1,
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id             TEXT NOT NULL,
+    attack_id           TEXT NOT NULL,
+    case_id             TEXT,
+    attack_name         TEXT NOT NULL DEFAULT '',
+    category            TEXT NOT NULL,
+    "group"             TEXT,
+    attack_group        TEXT,
+    attack_type         TEXT NOT NULL,
+    "type"              TEXT,
+    severity            TEXT NOT NULL DEFAULT 'medium',
+    is_control          INTEGER NOT NULL DEFAULT 0,
+    repetition          INTEGER NOT NULL DEFAULT 1,
+    repetition_number   INTEGER NOT NULL DEFAULT 1,
+    model               TEXT NOT NULL,
+    model_name          TEXT,
+    prompt              TEXT NOT NULL,
+    query               TEXT,
+    system_prompt       TEXT,
+    retrieved_chunks    TEXT,
+    status              TEXT NOT NULL,
+    response            TEXT,
+    rule_based_verdict  TEXT,
+    judge_verdict       TEXT,
+    judge_reason        TEXT,
+    error_message       TEXT,
+    timestamp           TEXT NOT NULL,
+    latency_ms          REAL,
+    latency             REAL,
+    attempt             INTEGER NOT NULL DEFAULT 1,
+    max_attempts        INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (scan_id) REFERENCES scan_sessions(scan_id)
 );
 """
@@ -97,6 +112,32 @@ class ResultStore:
             conn.execute(_CREATE_RESULTS)
             conn.execute(_CREATE_IDX_SCAN)
             conn.execute(_CREATE_IDX_ATTACK)
+
+            # Ensure extra columns exist if table was already created by an older version
+            cursor = conn.execute("PRAGMA table_info(probe_results);")
+            existing_cols = {row["name"] for row in cursor.fetchall()}
+            col_defs = {
+                "case_id": "TEXT",
+                "group": "TEXT",
+                "attack_group": "TEXT",
+                "type": "TEXT",
+                "is_control": "INTEGER DEFAULT 0",
+                "repetition": "INTEGER DEFAULT 1",
+                "repetition_number": "INTEGER DEFAULT 1",
+                "model_name": "TEXT",
+                "query": "TEXT",
+                "retrieved_chunks": "TEXT",
+                "rule_based_verdict": "TEXT",
+                "judge_verdict": "TEXT",
+                "judge_reason": "TEXT",
+                "latency": "REAL",
+            }
+            for col, ddl_type in col_defs.items():
+                if col not in existing_cols:
+                    try:
+                        conn.execute(f'ALTER TABLE probe_results ADD COLUMN "{col}" {ddl_type};')
+                    except Exception:
+                        pass
         logger.debug("Schema initialised at '%s'.", self.db_path)
 
     # ── Write operations ──────────────────────────────────────────────────────
@@ -127,63 +168,100 @@ class ResultStore:
             )
         logger.debug("Saved session '%s'.", session.scan_id)
 
+    def _extract_row_tuple(self, result: ProbeResult) -> tuple:
+        case_id = result.case_id or result.attack_id
+        group = result.group or ""
+        atk_type = result.type or result.attack_type
+        query = result.query or result.prompt
+        retrieved_chunks_str = (
+            json.dumps(result.retrieved_chunks)
+            if isinstance(result.retrieved_chunks, list)
+            else (str(result.retrieved_chunks) if result.retrieved_chunks is not None else "[]")
+        )
+        is_ctrl = 1 if result.is_control else 0
+        rep = result.repetition
+        lat = result.latency_ms
+        verdict = result.rule_based_verdict or ("PASS" if result.status == ProbeStatus.SUCCESS else "ERROR")
+        j_verdict = getattr(result, "judge_verdict", None)
+        j_reason = getattr(result, "judge_reason", None)
+
+        return (
+            result.scan_id,
+            result.attack_id,
+            case_id,
+            result.attack_name,
+            result.category,
+            group,
+            group,
+            result.attack_type,
+            atk_type,
+            result.severity,
+            is_ctrl,
+            rep,
+            rep,
+            result.model,
+            result.model,
+            result.prompt,
+            query,
+            result.system_prompt,
+            retrieved_chunks_str,
+            result.status.value,
+            result.response,
+            verdict,
+            j_verdict,
+            j_reason,
+            result.error_message,
+            result.timestamp.isoformat(),
+            lat,
+            lat,
+            result.attempt,
+            result.max_attempts,
+        )
+
     def save_result(self, result: ProbeResult) -> None:
         """Insert a single ProbeResult row."""
+        row = self._extract_row_tuple(result)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO probe_results (
-                    scan_id, attack_id, attack_name, category, attack_type,
-                    severity, model, prompt, system_prompt, status,
-                    response, error_message, timestamp, latency_ms,
-                    attempt, max_attempts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scan_id, attack_id, case_id, attack_name, category, "group", attack_group,
+                    attack_type, "type", severity, is_control, repetition, repetition_number,
+                    model, model_name, prompt, query, system_prompt, retrieved_chunks,
+                    status, response, rule_based_verdict, judge_verdict, judge_reason,
+                    error_message, timestamp, latency_ms, latency, attempt, max_attempts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    result.scan_id,
-                    result.attack_id,
-                    result.attack_name,
-                    result.category,
-                    result.attack_type,
-                    result.severity,
-                    result.model,
-                    result.prompt,
-                    result.system_prompt,
-                    result.status.value,
-                    result.response,
-                    result.error_message,
-                    result.timestamp.isoformat(),
-                    result.latency_ms,
-                    result.attempt,
-                    result.max_attempts,
-                ),
+                row,
             )
         logger.debug("Saved result for attack '%s' (status=%s).", result.attack_id, result.status.value)
 
     def save_results_bulk(self, results: List[ProbeResult]) -> None:
         """Insert multiple ProbeResult rows in a single transaction."""
-        rows = [
-            (
-                r.scan_id, r.attack_id, r.attack_name, r.category, r.attack_type,
-                r.severity, r.model, r.prompt, r.system_prompt, r.status.value,
-                r.response, r.error_message, r.timestamp.isoformat(), r.latency_ms,
-                r.attempt, r.max_attempts,
-            )
-            for r in results
-        ]
+        rows = [self._extract_row_tuple(r) for r in results]
         with self._connect() as conn:
             conn.executemany(
                 """
                 INSERT INTO probe_results (
-                    scan_id, attack_id, attack_name, category, attack_type,
-                    severity, model, prompt, system_prompt, status,
-                    response, error_message, timestamp, latency_ms,
-                    attempt, max_attempts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scan_id, attack_id, case_id, attack_name, category, "group", attack_group,
+                    attack_type, "type", severity, is_control, repetition, repetition_number,
+                    model, model_name, prompt, query, system_prompt, retrieved_chunks,
+                    status, response, rule_based_verdict, judge_verdict, judge_reason,
+                    error_message, timestamp, latency_ms, latency, attempt, max_attempts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
         logger.info("Bulk-inserted %d probe results.", len(rows))
+
+    def update_judge_result(self, row_id: int, verdict: str, reason: str) -> None:
+        """Update the judge verdict and reason for a specific probe result row."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE probe_results SET judge_verdict = ?, judge_reason = ? WHERE id = ?",
+                (verdict, reason, row_id),
+            )
+        logger.debug("Updated judge verdict for row %d: %s", row_id, verdict)
 
     # ── Read operations ───────────────────────────────────────────────────────
 

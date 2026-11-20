@@ -151,6 +151,35 @@ def load_entries_flat(directory: Union[str, Path, None] = None) -> List[AttackEn
 
 # ── Seed library loader ───────────────────────────────────────────────────────
 
+def load_hosts(
+    seed_path: Union[str, Path, None] = None,
+    additions_path: Union[str, Path, None] = None,
+) -> dict[str, str]:
+    """
+    Load and return the merged hosts dictionary from seed and additions YAML files.
+    """
+    seed_path = Path(seed_path) if seed_path else _DATA_DIR / "seed_attacks.yaml"
+    additions_path = (
+        Path(additions_path) if additions_path
+        else _DATA_DIR / "attack_library_additions.yaml"
+    )
+
+    hosts: dict[str, str] = {}
+    if seed_path.exists():
+        with seed_path.open("r", encoding="utf-8") as fh:
+            raw_seed = yaml.safe_load(fh)
+            if isinstance(raw_seed, dict) and "hosts" in raw_seed and isinstance(raw_seed["hosts"], dict):
+                hosts.update(raw_seed["hosts"])
+
+    if additions_path.exists():
+        with additions_path.open("r", encoding="utf-8") as fh:
+            raw_adds = yaml.safe_load(fh)
+            if isinstance(raw_adds, dict) and "hosts" in raw_adds and isinstance(raw_adds["hosts"], dict):
+                hosts.update(raw_adds["hosts"])
+
+    return hosts
+
+
 def load_library(
     seed_path: Union[str, Path, None] = None,
     additions_path: Union[str, Path, None] = None,

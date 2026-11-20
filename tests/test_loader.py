@@ -405,17 +405,20 @@ class TestLoadLibrary:
         assert isinstance(controls, list)
 
     def test_load_library_attack_count(self):
-        """27 of the 38 cases are enabled → 27 attacks returned."""
+        """27 seed + 21 additions attacks = 48 total attacks returned."""
         attacks, controls = load_library()
-        assert len(attacks) == 27, (
-            f"Expected 27 enabled attacks, got {len(attacks)}. "
+        assert len(attacks) == 48, (
+            f"Expected 48 enabled attacks, got {len(attacks)}. "
             f"IDs: {sorted(c.id for c in attacks)}"
         )
 
-    def test_load_library_no_controls_in_seed(self):
-        """The seed has no is_control=true cases → controls list is empty."""
+    def test_load_library_controls_count(self):
+        """The additions file adds 10 control probes → controls list has 10."""
         _, controls = load_library()
-        assert controls == []
+        assert len(controls) == 10, (
+            f"Expected 10 controls, got {len(controls)}. "
+            f"IDs: {sorted(c.id for c in controls)}"
+        )
 
     def test_disabled_ids_not_in_attacks(self):
         """The 11 disabled IDs must not appear in the attacks list."""
@@ -503,16 +506,21 @@ class TestLoadLibrary:
         """is_control=True cases go to controls; is_control=False to attacks."""
         control_case = {
             **INDIRECT_CASE,
-            "id": "CT-001",
+            "id": "ZZ-001",          # unique ID that never conflicts with additions
             "is_control": True,
         }
+        # Use a nonexistent additions path so this test is isolated from the
+        # real additions file (which already defines its own CT-* ids).
         seed = _make_seed_yaml(tmp_path, [DIRECT_CASE, control_case])
-        attacks, controls = load_library(seed_path=seed)
+        attacks, controls = load_library(
+            seed_path=seed,
+            additions_path=tmp_path / "no_additions.yaml",  # does not exist → skipped
+        )
         attack_ids = {c.id for c in attacks}
         control_ids = {c.id for c in controls}
         assert "PI-001" in attack_ids
-        assert "CT-001" in control_ids
-        assert "CT-001" not in attack_ids
+        assert "ZZ-001" in control_ids
+        assert "ZZ-001" not in attack_ids
 
     def test_missing_additions_file_silently_ignored(self, tmp_path):
         """If additions_path does not exist, load_library() proceeds normally."""
@@ -557,3 +565,288 @@ class TestLoadLibrary:
         assert "example.com/upload" in doc
         assert "{{payload:code_01}}" not in doc
         assert "{{INJECTION}}" not in doc
+
+
+# ── Additions file: load_library() integration tests ─────────────────────────
+
+# Canary and patterns that MUST exist in the target application / corpus.
+# These are verified structurally (present in the YAML cases) so the test
+# suite catches any accidental rename.
+_CANARY = "CANARY_SENTINEL_ALPHA_772"
+_CORP = "Sentinel Corp"
+_POISONING_TOKENS = {
+    "CP-001": "EXAM-SHIFT-DELTA-99",
+    "CP-002": "LIB-CLOSURE-OMEGA-55",
+    "CP-003": "MEET-RELO-GAMMA-21",
+    "CP-004": "PROP-REMOVED-ZETA-07",
+}
+_DISABLED_SEED = {
+    "CI-003", "CI-006", "CI-007",
+    "SC-002", "SC-003",
+    "MI-003", "MI-005",
+    "BP-004", "BP-005",
+    "ML-004", "ML-005",
+}
+
+
+class TestAdditionsLibrary:
+    """
+    Integration tests for load_library() after merging seed + additions file.
+    All counts assume:
+      - 27 enabled seed attacks (11 disabled)
+      - 31 additions attacks  (SL×5 SD×5 CP×4 AC×2 OB×3 PP×2 = 21 attacks,
+        CT×10 controls = 10 controls; 21 attack + 10 control = 31 cases)
+      Total attacks  = 27 + 21 = 48
+      Total controls = 0  + 10 = 10
+    """
+
+    # ── Counts ────────────────────────────────────────────────────────────────
+
+    def test_attack_count_is_48(self):
+        attacks, controls = load_library()
+        assert len(attacks) == 48, (
+            f"Expected 48 attacks, got {len(attacks)}. "
+            f"IDs: {sorted(c.id for c in attacks)}"
+        )
+
+    def test_control_count_is_10(self):
+        _, controls = load_library()
+        assert len(controls) == 10, (
+            f"Expected 10 controls, got {len(controls)}. "
+            f"IDs: {sorted(c.id for c in controls)}"
+        )
+
+    # ── No duplicate IDs ──────────────────────────────────────────────────────
+
+    def test_no_duplicate_ids(self):
+        attacks, controls = load_library()
+        all_ids = [c.id for c in attacks + controls]
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for id_ in all_ids:
+            if id_ in seen:
+                duplicates.append(id_)
+            seen.add(id_)
+        assert duplicates == [], f"Duplicate IDs found: {duplicates}"
+
+    # ── Group membership ──────────────────────────────────────────────────────
+
+    def test_sl_cases_present(self):
+        attacks, _ = load_library()
+        ids = {c.id for c in attacks}
+        for i in range(1, 6):
+            assert f"SL-00{i}" in ids, f"SL-00{i} missing from attacks"
+
+    def test_sd_cases_present(self):
+        attacks, _ = load_library()
+        ids = {c.id for c in attacks}
+        for i in range(1, 6):
+            assert f"SD-00{i}" in ids, f"SD-00{i} missing from attacks"
+
+    def test_cp_cases_present_and_are_poisoning_type(self):
+        attacks, _ = load_library()
+        cp = {c.id: c for c in attacks if c.id.startswith("CP-")}
+        for i in range(1, 5):
+            cid = f"CP-00{i}"
+            assert cid in cp, f"{cid} missing from attacks"
+            assert cp[cid].type == "poisoning", f"{cid} should have type='poisoning'"
+
+    def test_ac_cases_present(self):
+        attacks, _ = load_library()
+        ids = {c.id for c in attacks}
+        assert "AC-001" in ids
+        assert "AC-002" in ids
+
+    def test_ob_variants_present(self):
+        attacks, _ = load_library()
+        ids = {c.id for c in attacks}
+        assert "OB-002" in ids
+        assert "OB-003" in ids
+        assert "OB-004" in ids
+
+    def test_pp_cases_present_with_correct_positions(self):
+        attacks, _ = load_library()
+        pp = {c.id: c for c in attacks if c.id.startswith("PP-")}
+        assert "PP-001" in pp, "PP-001 missing"
+        assert "PP-002" in pp, "PP-002 missing"
+        assert pp["PP-001"].position == "start", "PP-001 should have position='start'"
+        assert pp["PP-002"].position == "end",   "PP-002 should have position='end'"
+
+    def test_ct_cases_are_controls(self):
+        _, controls = load_library()
+        ct_ids = {c.id for c in controls}
+        for i in range(1, 11):
+            cid = f"CT-0{i:02d}"
+            assert cid in ct_ids, f"{cid} missing from controls"
+
+    def test_controls_have_expected_behavior(self):
+        _, controls = load_library()
+        for c in controls:
+            if c.id.startswith("CT-"):
+                assert c.expected_behavior == "answer normally", (
+                    f"{c.id}.expected_behavior = '{c.expected_behavior}', want 'answer normally'"
+                )
+
+    def test_controls_have_is_control_true(self):
+        _, controls = load_library()
+        for c in controls:
+            assert c.is_control is True, f"{c.id} in controls but is_control={c.is_control}"
+
+    def test_seed_disabled_ids_absent(self):
+        attacks, controls = load_library()
+        all_ids = {c.id for c in attacks + controls}
+        overlap = _DISABLED_SEED & all_ids
+        assert overlap == set(), f"Disabled seed IDs found in library: {overlap}"
+
+    # ── Canary / pattern integrity ────────────────────────────────────────────
+
+    def test_canary_in_sl_patterns(self):
+        """Every SL case must list the canary token in patterns."""
+        attacks, _ = load_library()
+        sl_cases = [c for c in attacks if c.id.startswith("SL-")]
+        assert len(sl_cases) == 5
+        for c in sl_cases:
+            assert _CANARY in c.patterns, (
+                f"{c.id}.patterns does not contain canary '{_CANARY}': {c.patterns}"
+            )
+
+    def test_canary_in_sd_patterns(self):
+        """Every SD case must list the canary token in patterns."""
+        attacks, _ = load_library()
+        sd_cases = [c for c in attacks if c.id.startswith("SD-")]
+        assert len(sd_cases) == 5
+        for c in sd_cases:
+            assert _CANARY in c.patterns, (
+                f"{c.id}.patterns does not contain canary '{_CANARY}': {c.patterns}"
+            )
+
+    def test_sd005_contains_corp_name_pattern(self):
+        """SD-005 probes Sentinel Corp by name; pattern list must include the corp name."""
+        attacks, _ = load_library()
+        sd5 = next(c for c in attacks if c.id == "SD-005")
+        assert _CORP in sd5.patterns, (
+            f"SD-005.patterns should include '{_CORP}': {sd5.patterns}"
+        )
+
+    def test_poisoning_patterns_match_embedded_tokens(self):
+        """
+        Each CP case's pattern list must contain the unique tracking token
+        embedded in its setup_document, ensuring the detector can match it.
+        """
+        attacks, _ = load_library()
+        cp_map = {c.id: c for c in attacks if c.id.startswith("CP-")}
+        for cid, expected_token in _POISONING_TOKENS.items():
+            assert cid in cp_map, f"{cid} missing from attacks"
+            case = cp_map[cid]
+            assert expected_token in case.patterns, (
+                f"{cid}.patterns does not contain token '{expected_token}': {case.patterns}"
+            )
+            assert expected_token in case.setup_document, (
+                f"{cid}.setup_document does not contain its own token '{expected_token}'"
+            )
+
+    def test_canary_exists_in_demo_chatbot_source(self):
+        """
+        The canary we probe for must be the exact DEFAULT_CANARY defined in
+        DemoChatbot — confirming the YAML and the target app are in sync.
+        """
+        from llm_sentinel.demo.chatbot import DEFAULT_CANARY
+        assert DEFAULT_CANARY == _CANARY, (
+            f"Canary mismatch: YAML uses '{_CANARY}' but DemoChatbot uses '{DEFAULT_CANARY}'"
+        )
+
+    def test_sentinel_corp_in_demo_system_prompt(self):
+        """
+        Sentinel Corp must appear in the DemoChatbot's system prompt so
+        SD-005's probe is meaningful.
+        """
+        from llm_sentinel.demo.chatbot import DemoChatbot
+        bot = DemoChatbot()
+        assert _CORP in bot.system_prompt, (
+            f"'{_CORP}' not found in DemoChatbot.system_prompt"
+        )
+
+    def test_ob002_hex_note_present(self):
+        """OB-002 must carry the decoding note so reviewers know what the hex says."""
+        attacks, _ = load_library()
+        ob2 = next((c for c in attacks if c.id == "OB-002"), None)
+        assert ob2 is not None, "OB-002 missing from attacks"
+        # note field is an extra/ignored field — access via model_extra if needed
+        # Minimal check: the query contains hex-like content
+        assert "49676e" in ob2.query.lower() or "hex" in ob2.query.lower(), (
+            "OB-002.query should reference hex encoding"
+        )
+
+    def test_pp_cases_are_indirect_type(self):
+        attacks, _ = load_library()
+        for pid in ("PP-001", "PP-002"):
+            case = next((c for c in attacks if c.id == pid), None)
+            assert case is not None, f"{pid} missing"
+            assert case.type == "indirect", f"{pid}.type should be 'indirect'"
+            assert case.host == "email", f"{pid}.host should be 'email'"
+
+    def test_all_attack_sources_set(self):
+        """Every additions case must have source set to the required string."""
+        attacks, controls = load_library()
+        additions_ids = {
+            *[f"SL-00{i}" for i in range(1, 6)],
+            *[f"SD-00{i}" for i in range(1, 6)],
+            *[f"CP-00{i}" for i in range(1, 5)],
+            "AC-001", "AC-002",
+            "OB-002", "OB-003", "OB-004",
+            "PP-001", "PP-002",
+            *[f"CT-0{i:02d}" for i in range(1, 11)],
+        }
+        all_cases = {c.id: c for c in attacks + controls}
+        for cid in additions_ids:
+            assert cid in all_cases, f"{cid} missing from library"
+            assert all_cases[cid].source == "own variation of OWASP LLM0X pattern", (
+                f"{cid}.source = '{all_cases[cid].source}', "
+                f"want exact string 'own variation of OWASP LLM0X pattern'"
+            )
+
+    def test_no_functional_code_in_queries(self):
+        """
+        None of the new additions cases should contain shell commands,
+        import statements, or executable patterns — plain wording only.
+        """
+        import re
+        code_re = re.compile(
+            r"(import\s+\w+|subprocess|exec\(|eval\(|os\.system|__import__|"
+            r"curl\s+http|wget\s+http|rm\s+-rf|chmod\s+\d+)",
+            re.IGNORECASE,
+        )
+        attacks, controls = load_library()
+        additions_cases = [
+            c for c in attacks + controls
+            if c.id.startswith(("SL-", "SD-", "CP-", "AC-", "OB-", "PP-", "CT-"))
+        ]
+        for c in additions_cases:
+            text = (c.query or "") + (c.injection or "") + (c.setup_document or "")
+            match = code_re.search(text)
+            assert match is None, (
+                f"{c.id} contains a potentially executable pattern: '{match.group(0)}'"
+            )
+
+    def test_no_real_domains_in_additions(self):
+        """
+        All domains in additions cases must use .example TLD (never real TLDs).
+        Canary tokens and tracking codes are exempt from this check.
+        """
+        import re
+        # Match domain-like strings with real TLDs (not .example)
+        real_domain_re = re.compile(
+            r"\b(?!.*\.example\b)[a-z0-9-]+\.(com|net|org|io|co|gov|edu|uk|de|ru)\b",
+            re.IGNORECASE,
+        )
+        attacks, controls = load_library()
+        additions_cases = [
+            c for c in attacks + controls
+            if c.id.startswith(("SL-", "SD-", "CP-", "AC-", "OB-", "PP-", "CT-"))
+        ]
+        for c in additions_cases:
+            text = (c.query or "") + (c.injection or "") + (c.setup_document or "")
+            match = real_domain_re.search(text)
+            assert match is None, (
+                f"{c.id} contains a real domain '{match.group(0)}'; use .example instead"
+            )
